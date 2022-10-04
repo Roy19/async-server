@@ -25,7 +25,7 @@ void server(event_data* ed) {
             } else {
                 (ed->readn)++;
                 if (ed->readn >= 4 && is_end(ed->incoming_data, ed->readn)) {
-                    fprintf(stdout, "Read %ld bytes from client\n", bytes_read);
+                    fprintf(stdout, "Read %ld bytes from client\n", ed->readn);
                     ed->state = WRITING;
                     break;
                 }
