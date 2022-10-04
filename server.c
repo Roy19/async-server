@@ -105,7 +105,7 @@ int main() {
         return -1;
     }
 
-    if (listen(sockfd, 500) == -1) {
+    if (listen(sockfd, BACKLOG) == -1) {
         fprintf(stderr, "Failed to listen on socket\n");
         close(sockfd);
         return -1;
