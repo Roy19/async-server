@@ -8,11 +8,11 @@ void server(event_data* ed) {
             
             if (bytes_read == -1) {
                 if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                    break;
+                    return;
                 } else {
                     fprintf(stderr, "Failed to read from server. Errno:%d\n", errno);
                     ed->state = ENDED;
-                    break;
+                    return;
                 }
             } else if (bytes_read == 0) {
                 break;
@@ -32,10 +32,10 @@ void server(event_data* ed) {
 
             if (bytes_written == -1) {
                 if (errno == EWOULDBLOCK || errno == EAGAIN) {
-                    break;
+                    return;
                 } else {
                     fprintf(stderr, "Failed to write to client\n");
-                    break;
+                    return;
                 }
             } else if (bytes_written == total_size_of_data) {
                 fprintf(stdout, "Written all bytes to client\n");
@@ -135,7 +135,7 @@ int main(int argc, char **argv) {
                             close(sockfd);
                             return -1;
                         }
-                        event_loop_add_fd(el, connfd, EPOLLIN);
+                        event_loop_add_fd(el, connfd, EPOLLIN | EPOLLET | EPOLLONESHOT);
                     }
                 }
             } else {
@@ -143,13 +143,13 @@ int main(int argc, char **argv) {
                 server(ed);
 
                 if (ed->state == READING) {
-                    uint32_t events_to_check = EPOLLIN;
+                    uint32_t events_to_check = EPOLLIN | EPOLLET | EPOLLONESHOT;
                     if (event_loop_modify_fd(el, ed->fd, ed, events_to_check) == -1) {
                         fprintf(stderr, "Failed to modify file descriptor");
                         continue;
                     }
                 } else if (ed->state == WRITING) {
-                    uint32_t events_to_check = EPOLLOUT;
+                    uint32_t events_to_check = EPOLLOUT | EPOLLET | EPOLLONESHOT;
                     if (event_loop_modify_fd(el, ed->fd, ed, events_to_check) == -1) {
                         fprintf(stderr, "Failed to modify file descriptor");
                         continue;
