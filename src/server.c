@@ -1,17 +1,10 @@
 #include "server.h"
 #include "event_loop.h"
 
-bool is_end(char *buffer, ssize_t last) {
-    return (buffer[last - 1] == '\n' && 
-            buffer[last - 2] == '\r' && 
-            buffer[last - 3] == '\n' && 
-            buffer[last - 4] == '\r');
-}
-
 void server(event_data* ed) {
     if (ed->state == READING) {
         while (1) {
-            ssize_t bytes_read = read(ed->fd, (ed->incoming_data) + (ed->readn), 1);
+            ssize_t bytes_read = read(ed->fd, (ed->incoming_data) + (ed->readn), BUFFSIZE);
             
             if (bytes_read == -1) {
                 if (errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -25,11 +18,9 @@ void server(event_data* ed) {
                 break;
             } else {
                 (ed->readn) += bytes_read;
-                if (ed->readn >= 4 && is_end(ed->incoming_data, ed->readn)) {
-                    fprintf(stdout, "Read %ld bytes from client\n", ed->readn);
-                    ed->state = WRITING;
-                    break;
-                }
+                fprintf(stdout, "Read %ld bytes from client\n", ed->readn);
+                ed->state = WRITING;
+                break;
             }
         }
     } else if (ed->state == WRITING) {
