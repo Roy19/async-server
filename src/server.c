@@ -148,7 +148,6 @@ int main(int argc, char **argv) {
                     }
                 }
             } else {
-                fprintf(stdout, "Got a read notification\n");
                 event_data *ed = (event_data *)(el->events[i].data.ptr);
                 server(ed);
 
