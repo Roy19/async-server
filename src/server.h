@@ -18,7 +18,7 @@
 
 const int BUFFSIZE = 1 * 1024;
 const int PORT = 8080;
-const int MAXEVENTS = 1000000;
+const int MAXEVENTS = 8192;
 const int BACKLOG = 128;
 const char* localhost = "127.0.0.1";
 const char* response_message = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\nServer: epoll_server\r\n\r\nHello World!";
