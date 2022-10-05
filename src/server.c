@@ -103,7 +103,7 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    if (event_loop_add_fd(el, sockfd, EPOLLIN | EPOLLOUT | EPOLLET) == -1) {
+    if (event_loop_add_fd(el, sockfd, EPOLLIN) == -1) {
         fprintf(stderr, "Failed to add listening socket to event loop\n");
         destroy_event_loop(el);
         close(sockfd);
@@ -135,7 +135,7 @@ int main(int argc, char **argv) {
                             close(sockfd);
                             return -1;
                         }
-                        event_loop_add_fd(el, connfd, EPOLLIN | EPOLLET | EPOLLONESHOT);
+                        event_loop_add_fd(el, connfd, EPOLLIN);
                     }
                 }
             } else {
@@ -143,13 +143,13 @@ int main(int argc, char **argv) {
                 server(ed);
 
                 if (ed->state == READING) {
-                    uint32_t events_to_check = EPOLLIN | EPOLLET | EPOLLONESHOT;
+                    uint32_t events_to_check = EPOLLIN;
                     if (event_loop_modify_fd(el, ed->fd, ed, events_to_check) == -1) {
                         fprintf(stderr, "Failed to modify file descriptor");
                         continue;
                     }
                 } else if (ed->state == WRITING) {
-                    uint32_t events_to_check = EPOLLOUT | EPOLLET | EPOLLONESHOT;
+                    uint32_t events_to_check = EPOLLOUT;
                     if (event_loop_modify_fd(el, ed->fd, ed, events_to_check) == -1) {
                         fprintf(stderr, "Failed to modify file descriptor");
                         continue;
@@ -161,12 +161,6 @@ int main(int argc, char **argv) {
                     free(ed->incoming_data);
                     free(ed);
                 }
-            }
-
-            if (el->events[i].events & (EPOLLHUP | EPOLLRDHUP)) {
-                fprintf(stdout, "Client connection closed\n");
-                remove_from_event_loop(el, ((event_data *)(el->events[i].data.ptr))->fd);
-                close(((event_data *)(el->events[i].data.ptr))->fd);
             }
         }
     }
