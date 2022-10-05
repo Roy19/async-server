@@ -1,4 +1,5 @@
 #include "server.h"
+#include "event_loop.h"
 
 bool is_end(char *buffer, ssize_t last) {
     return (buffer[last - 1] == '\n' && 
@@ -11,7 +12,7 @@ void server(event_data* ed) {
     if (ed->state == READING) {
         while (1) {
             ssize_t bytes_read = read(ed->fd, (ed->incoming_data) + (ed->readn), 1);
-
+            
             if (bytes_read == -1) {
                 if (errno == EAGAIN || errno == EWOULDBLOCK) {
                     break;
@@ -23,7 +24,7 @@ void server(event_data* ed) {
             } else if (bytes_read == 0) {
                 break;
             } else {
-                (ed->readn)++;
+                (ed->readn) += bytes_read;
                 if (ed->readn >= 4 && is_end(ed->incoming_data, ed->readn)) {
                     fprintf(stdout, "Read %ld bytes from client\n", ed->readn);
                     ed->state = WRITING;
@@ -57,16 +58,17 @@ void server(event_data* ed) {
     }
 }
 
-int epoll_ctl_add_fd(int epoll_fd, int fd, uint32_t events) {
-    struct epoll_event ev;
+int event_loop_add_fd(event_loop *el, int fd, uint32_t events) {
     event_data *data = (event_data *)malloc(sizeof(event_data));
     data->fd = fd;
     data->state = READING;
     data->readn = 0;
-    data->incoming_data = (char *)malloc(buff_size);
-    ev.data.ptr = data;
-    ev.events = events;
-    return epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &ev);
+    data->incoming_data = (char *)malloc(BUFFSIZE);
+    return add_to_event_loop(el, fd, data, events);
+}
+
+int event_loop_modify_fd(event_loop *el, int fd, event_data *ed, uint32_t events) {
+    return modify_file_descriptor_in_event_loop(el, fd, ed, events);
 }
 
 int set_non_blocking(int fd) {
@@ -78,18 +80,11 @@ int set_non_blocking(int fd) {
     return fcntl(fd, F_SETFL, existing_flags | O_NONBLOCK);
 }
 
-int main() {
+int main(int argc, char **argv) {
     struct sockaddr_in server_address, client_address;
-    struct epoll_event events[MAXEVENTS];
-    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    int sockfd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     if (sockfd == -1) {
         fprintf(stderr, "Failed to get socket\n");
-        return -1;
-    }
-
-    if (set_non_blocking(sockfd) == -1) {
-        fprintf(stderr, "Failed to set socket as non-blocking\n");
-        close(sockfd);
         return -1;
     }
 
@@ -111,33 +106,24 @@ int main() {
         return -1;
     }
 
-    int epoll_fd = epoll_create(1);
-    if (epoll_fd == -1) {
-        fprintf(stderr, "Failed to open an epoll instance\n");
-        close(sockfd);
+    event_loop *el = create_event_loop();
+    if (el == NULL) {
+        fprintf(stderr, "Failed to initialize the event loop");
         return -1;
     }
-    if (epoll_ctl_add_fd(epoll_fd, sockfd, EPOLLIN | EPOLLOUT | EPOLLET) == -1) {
-        fprintf(stderr, "Failed to add socket to epoll structure\n");
-        close(epoll_fd);
+
+    if (event_loop_add_fd(el, sockfd, EPOLLIN | EPOLLOUT | EPOLLET) == -1) {
+        fprintf(stderr, "Failed to add listening socket to event loop\n");
+        destroy_event_loop(el);
         close(sockfd);
         return -1;
     }
 
     while(1) {
-        int nfds = epoll_wait(epoll_fd, events, MAXEVENTS, -1);
-
-        if (nfds == -1) {
-            fprintf(stderr, "Received wrong number of events\n");
-            close(sockfd);
-            close(epoll_fd);
-            return -1;
-        } else if (nfds == 0) {
-            fprintf(stdout, "Received 0 events\n");
-        }
+        int nfds = wait_for_events(el, -1);
 
         for (int i = 0; i < nfds; i++) {
-            if (((event_data *)(events[i].data.ptr))->fd == sockfd) {
+            if (((event_data *)(el->events[i].data.ptr))->fd == sockfd) {
                 // handle a new connection
                 while (1) {
                     socklen_t length_of_address = sizeof(client_address);
@@ -158,45 +144,44 @@ int main() {
                             close(sockfd);
                             return -1;
                         }
-                        epoll_ctl_add_fd(epoll_fd, connfd, EPOLLIN | EPOLLET | EPOLLONESHOT);
+                        event_loop_add_fd(el, connfd, EPOLLIN | EPOLLET | EPOLLONESHOT);
                     }
                 }
             } else {
-                struct epoll_event ev;
-                event_data *ed = (event_data *)(events[i].data.ptr);
+                fprintf(stdout, "Got a read notification\n");
+                event_data *ed = (event_data *)(el->events[i].data.ptr);
                 server(ed);
 
                 if (ed->state == READING) {
-                    ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
-                    ev.data.ptr = ed;
-                    if (epoll_ctl(epoll_fd, EPOLL_CTL_MOD, ed->fd, &ev) == -1) {
+                    uint32_t events_to_check = EPOLLIN | EPOLLET | EPOLLONESHOT;
+                    if (event_loop_modify_fd(el, ed->fd, ed, events_to_check) == -1) {
                         fprintf(stderr, "Failed to modify file descriptor");
                         continue;
                     }
                 } else if (ed->state == WRITING) {
-                    ev.events = EPOLLOUT | EPOLLET | EPOLLONESHOT;
-                    ev.data.ptr = ed;
-                    if (epoll_ctl(epoll_fd, EPOLL_CTL_MOD, ed->fd, &ev) == -1) {
+                    uint32_t events_to_check = EPOLLOUT | EPOLLET | EPOLLONESHOT;
+                    if (event_loop_modify_fd(el, ed->fd, ed, events_to_check) == -1) {
                         fprintf(stderr, "Failed to modify file descriptor");
                         continue;
                     }
                 } else {
-                    epoll_ctl(epoll_fd, EPOLL_CTL_DEL, ed->fd, NULL);
+                    fprintf(stdout, "Closing client connection.\n");
+                    remove_from_event_loop(el, ed->fd);
                     close(ed->fd);
                     free(ed->incoming_data);
                     free(ed);
                 }
             }
 
-            if (events[i].events & (EPOLLHUP | EPOLLRDHUP)) {
+            if (el->events[i].events & (EPOLLHUP | EPOLLRDHUP)) {
                 fprintf(stdout, "Client connection closed\n");
-                epoll_ctl(epoll_fd, EPOLL_CTL_DEL, events[i].data.fd, NULL);
-                close(events[i].data.fd);
+                remove_from_event_loop(el, ((event_data *)(el->events[i].data.ptr))->fd);
+                close(((event_data *)(el->events[i].data.ptr))->fd);
             }
         }
     }
     
-    close(epoll_fd);
+    destroy_event_loop(el);
     close(sockfd);
 
     return 0;
