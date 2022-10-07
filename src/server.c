@@ -5,6 +5,7 @@ void server(event_data* ed) {
     ssize_t bytes_read = read(ed->fd, (ed->incoming_data) + (ed->readn), BUFFSIZE);
     if (bytes_read <= 0) {
         close(ed->fd);
+        event_loop_delete_fd(ed->el, ed->fd);
         return;
     } else {
         (ed->readn) += bytes_read;
@@ -39,8 +40,8 @@ void server(event_data* ed) {
 
 int event_loop_add_fd(event_loop *el, int fd, uint32_t events) {
     event_data *data = (event_data *)malloc(sizeof(event_data));
+    data->el = el;
     data->fd = fd;
-    data->state = READING;
     data->readn = 0;
     data->incoming_data = (char *)malloc(BUFFSIZE);
     return add_to_event_loop(el, fd, data, events);
@@ -48,6 +49,10 @@ int event_loop_add_fd(event_loop *el, int fd, uint32_t events) {
 
 int event_loop_modify_fd(event_loop *el, int fd, event_data *ed, uint32_t events) {
     return modify_file_descriptor_in_event_loop(el, fd, ed, events);
+}
+
+int event_loop_delete_fd(event_loop *el, int fd) {
+    return remove_from_event_loop(el, fd);
 }
 
 int set_non_blocking(int fd) {

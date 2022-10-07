@@ -18,7 +18,7 @@
 
 const int BUFFSIZE = 1 * 1024;
 const int PORT = 8080;
-const int MAXEVENTS = 8192;
+const int MAXEVENTS = 4096;
 const int BACKLOG = 128;
 const char* localhost = "127.0.0.1";
 
