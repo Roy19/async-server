@@ -2,57 +2,46 @@
 #include "event_loop.h"
 
 void server(event_data* ed) {
-    if (ed->state == READING) {
-        while (1) {
-            ssize_t bytes_read = read(ed->fd, (ed->incoming_data) + (ed->readn), BUFFSIZE);
-            
-            if (bytes_read == -1) {
-                if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                    break;
-                } else {
-                    fprintf(stderr, "Failed to read from server. Errno:%d\n", errno);
-                    ed->state = ENDED;
-                    break;
-                }
-            } else if (bytes_read == 0) {
-                break;
-            } else {
-                (ed->readn) += bytes_read;
-                fprintf(stdout, "Read %ld bytes from client\n", ed->readn);
-                ed->state = WRITING;
-                break;
-            }
-        }
-    } else if (ed->state == WRITING) {
-        size_t total_size_of_data = strlen(response_message), to_write = total_size_of_data;
-        ssize_t bytes_written = 0, curr_pointer = 0;
-        while (1) {
-            bytes_written += write(ed->fd, response_message + curr_pointer, to_write);
-            curr_pointer += bytes_written;
+    ssize_t bytes_read = read(ed->fd, (ed->incoming_data) + (ed->readn), BUFFSIZE);
+    if (bytes_read <= 0) {
+        close(ed->fd);
+        event_loop_delete_fd(ed->el, ed->fd);
+        return;
+    } else {
+        (ed->readn) += bytes_read;
+        // fprintf(stdout, "Read %ld bytes from client\n", ed->readn);
+    }
 
-            if (bytes_written == -1) {
-                if (errno == EWOULDBLOCK || errno == EAGAIN) {
-                    break;
-                } else {
-                    fprintf(stderr, "Failed to write to client\n");
-                    break;
-                }
-            } else if (bytes_written == total_size_of_data) {
-                fprintf(stdout, "Written all bytes to client\n");
-                ed->state = ENDED;
-                break;
+    size_t total_size_of_data = ed->readn, to_write = total_size_of_data;
+    ssize_t bytes_written = 0, curr_pointer = 0;
+    while (1) {
+        bytes_written += write(ed->fd, ed->incoming_data + curr_pointer, to_write);
+        curr_pointer += bytes_written;
+        if (bytes_written == -1) {
+            if (errno == EWOULDBLOCK || errno == EAGAIN) {
+                return;
             } else {
-                fprintf(stdout, "Written %ld bytes to client\n", bytes_written);
-                to_write -= bytes_written;
+                // fprintf(stderr, "Failed to write to client\n");
+                return;
             }
+        } else if (bytes_written == total_size_of_data) {
+            // fprintf(stdout, "Written all bytes to client\n");
+            free(ed->incoming_data);
+            ed->incoming_data = (char *)malloc(BUFFSIZE);
+            ed->readn = 0;
+            return;
+        } else {
+            // fprintf(stdout, "Written %ld bytes to client\n", bytes_written);
+            to_write -= bytes_written;
         }
     }
 }
 
+
 int event_loop_add_fd(event_loop *el, int fd, uint32_t events) {
     event_data *data = (event_data *)malloc(sizeof(event_data));
+    data->el = el;
     data->fd = fd;
-    data->state = READING;
     data->readn = 0;
     data->incoming_data = (char *)malloc(BUFFSIZE);
     return add_to_event_loop(el, fd, data, events);
@@ -62,10 +51,14 @@ int event_loop_modify_fd(event_loop *el, int fd, event_data *ed, uint32_t events
     return modify_file_descriptor_in_event_loop(el, fd, ed, events);
 }
 
+int event_loop_delete_fd(event_loop *el, int fd) {
+    return remove_from_event_loop(el, fd);
+}
+
 int set_non_blocking(int fd) {
     int existing_flags = fcntl(fd, F_GETFL);
     if (existing_flags == -1) {
-        fprintf(stderr, "Failed to get flags for socket\n");
+        // fprintf(stderr, "Failed to get flags for socket\n");
         return -1;
     }
     return fcntl(fd, F_SETFL, existing_flags | O_NONBLOCK);
@@ -121,46 +114,26 @@ int main(int argc, char **argv) {
                     int connfd = accept(sockfd, (struct sockaddr *)&client_address, &length_of_address);
                     if (connfd == -1) {
                         if (errno == EWOULDBLOCK || errno == EAGAIN) {
-                            fprintf(stdout, "No pending connections\n");
+                            // fprintf(stdout, "No pending connections\n");
                             break;
                         } else {
-                            fprintf(stderr, "Failed to accept incoming connections\n");
+                            // fprintf(stderr, "Failed to accept incoming connections\n");
                             close(sockfd);
                             return -1;
                         }
                     } else {
-                        fprintf(stdout, "Got a new connection from a client\n");
+                        // fprintf(stdout, "Got a new connection from a client\n");
                         if (set_non_blocking(connfd) == -1) {
-                            fprintf(stderr, "Failed to set socket as non-blocking\n");
+                            // fprintf(stderr, "Failed to set socket as non-blocking\n");
                             close(sockfd);
-                            return -1;
+                            break;
                         }
-                        event_loop_add_fd(el, connfd, EPOLLIN);
+                        event_loop_add_fd(el, connfd, EPOLLIN | EPOLLET);
                     }
                 }
             } else {
                 event_data *ed = (event_data *)(el->events[i].data.ptr);
                 server(ed);
-
-                if (ed->state == READING) {
-                    uint32_t events_to_check = EPOLLIN;
-                    if (event_loop_modify_fd(el, ed->fd, ed, events_to_check) == -1) {
-                        fprintf(stderr, "Failed to modify file descriptor");
-                        continue;
-                    }
-                } else if (ed->state == WRITING) {
-                    uint32_t events_to_check = EPOLLOUT;
-                    if (event_loop_modify_fd(el, ed->fd, ed, events_to_check) == -1) {
-                        fprintf(stderr, "Failed to modify file descriptor");
-                        continue;
-                    }
-                } else {
-                    fprintf(stdout, "Closing client connection.\n");
-                    remove_from_event_loop(el, ed->fd);
-                    close(ed->fd);
-                    free(ed->incoming_data);
-                    free(ed);
-                }
             }
         }
     }
