@@ -64,8 +64,26 @@ int set_non_blocking(int fd) {
     return fcntl(fd, F_SETFL, existing_flags | O_NONBLOCK);
 }
 
+void keep_accepting_connections(event_loop *el, int sockfd) {
+    struct sockaddr_in client_address;
+    while (1) {
+        socklen_t length_of_address = sizeof(client_address);
+        int connfd = accept(sockfd, (struct sockaddr *)&client_address, &length_of_address);
+        if (connfd == -1) {
+            return;
+        } else {
+            // fprintf(stdout, "Got a new connection from a client\n");
+            if (set_non_blocking(connfd) == -1) {
+                // fprintf(stderr, "Failed to set socket as non-blocking\n");
+                return;
+            }
+            event_loop_add_fd(el, connfd, EPOLLIN | EPOLLET);
+        }
+    }
+}
+
 int main(int argc, char **argv) {
-    struct sockaddr_in server_address, client_address;
+    struct sockaddr_in server_address;
     int sockfd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     if (sockfd == -1) {
         fprintf(stderr, "Failed to get socket\n");
@@ -109,28 +127,7 @@ int main(int argc, char **argv) {
         for (int i = 0; i < nfds; i++) {
             if (((event_data *)(el->events[i].data.ptr))->fd == sockfd) {
                 // handle a new connection
-                while (1) {
-                    socklen_t length_of_address = sizeof(client_address);
-                    int connfd = accept(sockfd, (struct sockaddr *)&client_address, &length_of_address);
-                    if (connfd == -1) {
-                        if (errno == EWOULDBLOCK || errno == EAGAIN) {
-                            // fprintf(stdout, "No pending connections\n");
-                            break;
-                        } else {
-                            // fprintf(stderr, "Failed to accept incoming connections\n");
-                            close(sockfd);
-                            return -1;
-                        }
-                    } else {
-                        // fprintf(stdout, "Got a new connection from a client\n");
-                        if (set_non_blocking(connfd) == -1) {
-                            // fprintf(stderr, "Failed to set socket as non-blocking\n");
-                            close(sockfd);
-                            break;
-                        }
-                        event_loop_add_fd(el, connfd, EPOLLIN | EPOLLET);
-                    }
-                }
+                keep_accepting_connections(el, sockfd);
             } else {
                 event_data *ed = (event_data *)(el->events[i].data.ptr);
                 server(ed);
