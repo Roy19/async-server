@@ -1,25 +1,15 @@
 #ifndef _SERVER_H
 #define _SERVER_H
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <strings.h>
-#include <string.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <netinet/ip.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <errno.h>
-#include <sys/epoll.h>
-#include <stdbool.h>
+#include "event_loop.h"
 
-const int BUFFSIZE = 1 * 1024;
-const int PORT = 8080;
-const int MAXEVENTS = 4096;
-const int BACKLOG = 128;
-const char* localhost = "127.0.0.1";
+int create_socket_and_listen();
+int set_non_blocking(int fd);
+event_state read_from_socket(event_data* ed);
+event_state write_to_socket(event_data* ed);
+void keep_accepting_connections(event_loop *el, int sockfd);
+int event_loop_add_fd(event_loop *el, int fd, uint32_t events);
+int event_loop_modify_fd(event_loop *el, int fd, event_data *ed, uint32_t events);
+int event_loop_delete_fd(event_loop *el, int fd);
 
 #endif

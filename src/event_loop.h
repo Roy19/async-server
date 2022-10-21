@@ -11,9 +11,16 @@ typedef struct event_loop {
     struct epoll_event *events;
 } event_loop;
 
+typedef enum{
+    READING,
+    WRITING,
+    CLOSED
+}event_state;
+
 typedef struct event_data {
     event_loop *el;
     int fd;
+    event_state state;
     char *incoming_data;
     ssize_t readn;
 }event_data;

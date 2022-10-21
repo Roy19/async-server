@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include "event_loop.h"
 
 event_loop *create_event_loop() {
