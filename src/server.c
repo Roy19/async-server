@@ -55,8 +55,6 @@ event_state write_to_socket(event_data* ed) {
             }
         } else if (bytes_written == total_size_of_data) {
             // fprintf(stdout, "Written all bytes to client\n");
-            free(ed->incoming_data);
-            ed->incoming_data = (char *)malloc(BUFFSIZE);
             ed->readn = 0;
             ed->state = READING;
             return READING;
