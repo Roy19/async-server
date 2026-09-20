@@ -1,1 +1,6 @@
 .vscode/*
+server
+*.o
+*.d
+.pycache/
+__pycache__/

@@ -1,0 +1,9 @@
+.git
+.vscode
+.pycache
+__pycache__
+server
+*.o
+*.d
+Dockerfile
+README.md
