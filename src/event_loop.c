@@ -1,78 +1,86 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
 #include "event_loop.h"
 
-event_loop *create_event_loop() {
-    event_loop *el = (event_loop *)malloc(sizeof(event_loop));
-    if (el == NULL) {
-        perror("Failed to create event loop");
+#include <errno.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+event_loop *event_loop_create(size_t max_events) {
+    if (max_events == 0) {
+        errno = EINVAL;
         return NULL;
     }
-    el->events = (struct epoll_event *)malloc(sizeof(struct epoll_event) * MAX_EVENTS);
-    if (el->events == NULL) {
-        perror("Failed to allocate memory for event loop");
-        free(el);
+
+    event_loop *loop = calloc(1, sizeof(*loop));
+    if (loop == NULL) {
         return NULL;
     }
-    el->event_loop_fd = epoll_create(EPOLL_CLOEXEC);
-    if (el->event_loop_fd == -1) {
-        perror("Failed to create epoll based event loop");
-        free(el->events);
-        free(el);
+
+    loop->events = calloc(max_events, sizeof(*loop->events));
+    if (loop->events == NULL) {
+        free(loop);
         return NULL;
     }
-    return el;
-}
 
-void destroy_event_loop(event_loop *el) {
-    if (el == NULL) {
-        perror("event loop specified is NULL");
-    } else {
-        if (el->events != NULL) {
-            free(el->events);
-        }
-        if (el->event_loop_fd > 0) {
-            close(el->event_loop_fd);
-        }
-        free(el);
+    loop->fd = epoll_create1(EPOLL_CLOEXEC);
+    if (loop->fd == -1) {
+        free(loop->events);
+        free(loop);
+        return NULL;
     }
+
+    loop->max_events = max_events;
+    return loop;
 }
 
-int add_to_event_loop(event_loop *el, int fd, event_data *ed, uint32_t events) {
-    if (el == NULL || el->event_loop_fd < 0) {
-        perror("Wrong event loop specified");
+void event_loop_destroy(event_loop *loop) {
+    if (loop == NULL) {
+        return;
+    }
+
+    if (loop->fd >= 0) {
+        close(loop->fd);
+    }
+    free(loop->events);
+    free(loop);
+}
+
+static int event_loop_control(event_loop *loop, int operation, int fd, void *data,
+                              uint32_t events) {
+    if (loop == NULL || loop->fd < 0) {
+        errno = EINVAL;
         return -1;
     }
-    struct epoll_event ev;
-    ev.data.ptr = ed;
-    ev.events = events;
-    return epoll_ctl(el->event_loop_fd, EPOLL_CTL_ADD, fd, &ev);
+
+    struct epoll_event event = {
+        .events = events,
+        .data.ptr = data,
+    };
+
+    return epoll_ctl(loop->fd, operation, fd, &event);
 }
 
-int modify_file_descriptor_in_event_loop(event_loop *el, int fd, event_data *ed, uint32_t events) {
-    if (el == NULL || el->event_loop_fd < 0) {
-        perror("Wrong event loop specified");
-        return -1;
-    }
-    struct epoll_event ev;
-    ev.data.ptr = ed;
-    ev.events = events;
-    return epoll_ctl(el->event_loop_fd, EPOLL_CTL_MOD, fd, &ev);
+int event_loop_add(event_loop *loop, int fd, void *data, uint32_t events) {
+    return event_loop_control(loop, EPOLL_CTL_ADD, fd, data, events);
 }
 
-int remove_from_event_loop(event_loop *el, int fd) {
-    if (el == NULL || el->event_loop_fd < 0) {
-        perror("Wrong event loop specified");
-        return -1;
-    }
-    return epoll_ctl(el->event_loop_fd, EPOLL_CTL_DEL, fd, NULL);
+int event_loop_modify(event_loop *loop, int fd, void *data, uint32_t events) {
+    return event_loop_control(loop, EPOLL_CTL_MOD, fd, data, events);
 }
 
-int wait_for_events(event_loop *el, int timeout) {
-    if (el == NULL || el->events == NULL || el->event_loop_fd < 0) {
-        perror("Wrong event loop specified");
+int event_loop_remove(event_loop *loop, int fd) {
+    if (loop == NULL || loop->fd < 0) {
+        errno = EINVAL;
         return -1;
     }
-    return epoll_wait(el->event_loop_fd, el->events, MAX_EVENTS, timeout);
+
+    return epoll_ctl(loop->fd, EPOLL_CTL_DEL, fd, NULL);
+}
+
+int event_loop_wait(event_loop *loop, int timeout_ms) {
+    if (loop == NULL || loop->fd < 0 || loop->events == NULL || loop->max_events == 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    return epoll_wait(loop->fd, loop->events, (int)loop->max_events, timeout_ms);
 }
