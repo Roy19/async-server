@@ -136,7 +136,8 @@ enum connection_action connection_read(connection *client) {
 enum connection_action connection_write(connection *client) {
     while (client->write_offset < client->buffered_bytes) {
         size_t remaining = client->buffered_bytes - client->write_offset;
-        ssize_t written = write(client->fd, client->buffer + client->write_offset, remaining);
+        ssize_t written =
+            send(client->fd, client->buffer + client->write_offset, remaining, MSG_NOSIGNAL);
 
         if (written > 0) {
             client->write_offset += (size_t)written;

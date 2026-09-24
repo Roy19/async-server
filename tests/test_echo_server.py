@@ -194,6 +194,28 @@ class EchoServerTestCase(ServerProcessTestCase):
             self.assertEqual(response, payload)
             self.assertEqual(client.recv(1), b"")
 
+    def test_survives_client_closing_while_echo_is_pending(self):
+        # The half-close moves the server's socket to CLOSE_WAIT, so the RST
+        # sent by closing with unread echo data makes the server's next write
+        # fail with EPIPE, which must not raise a fatal SIGPIPE.
+        payload = b"pending-echo-" * (64 * 1024 // 13)
+
+        def send_then_close(_):
+            if self.process.poll() is not None:
+                return
+            with contextlib.suppress(OSError):
+                with socket.create_connection((HOST, self.port), timeout=SOCKET_TIMEOUT_SECONDS) as client:
+                    client.sendall(payload)
+                    client.shutdown(socket.SHUT_WR)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
+            list(executor.map(send_then_close, range(2000)))
+        time.sleep(0.2)
+
+        self.assertIsNone(self.process.poll(), "server exited after a client closed mid-echo")
+        payload = b"after-client-close"
+        self.assertEqual(echo_once(self.port, payload), payload)
+
 
 class FileDescriptorExhaustionTestCase(ServerProcessTestCase):
     open_file_limit = 16
