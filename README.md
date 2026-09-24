@@ -105,7 +105,8 @@ The suite starts the server on an ephemeral loopback port and verifies:
 - fragmented client writes;
 - 64 concurrent clients;
 - client half-closes after sending, while still receiving the full echo, including
-  when the server is blocked writing the echo back; and
+  when the server is blocked writing the echo back;
+- clients closing while their echo is still pending do not kill the server with `SIGPIPE`; and
 - running out of file descriptors rejects excess connections instead of stopping the server.
 
 Run it against a separately built executable if needed:
