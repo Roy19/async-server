@@ -1,35 +1,24 @@
-#ifndef _EVENT_LOOP
-#define _EVENT_LOOP
+#ifndef ASYNC_SERVER_EVENT_LOOP_H
+#define ASYNC_SERVER_EVENT_LOOP_H
 
+#include <stddef.h>
+#include <stdint.h>
 #include <sys/epoll.h>
-#include <stdlib.h>
 
 #define MAX_EVENTS 8192
 
 typedef struct event_loop {
-    int event_loop_fd;
+    int fd;
     struct epoll_event *events;
+    size_t max_events;
 } event_loop;
 
-typedef enum{
-    READING,
-    WRITING,
-    CLOSED
-}event_state;
+event_loop *event_loop_create(size_t max_events);
+void event_loop_destroy(event_loop *loop);
 
-typedef struct event_data {
-    event_loop *el;
-    int fd;
-    event_state state;
-    char *incoming_data;
-    ssize_t readn;
-}event_data;
-
-event_loop *create_event_loop();
-int add_to_event_loop(event_loop *el, int fd, event_data *ed, uint32_t events);
-int modify_file_descriptor_in_event_loop(event_loop *el, int fd, event_data *ed, uint32_t events);
-int remove_from_event_loop(event_loop *el, int fd);
-void destroy_event_loop(event_loop *el);
-int wait_for_events(event_loop *el, int timeout);
+int event_loop_add(event_loop *loop, int fd, void *data, uint32_t events);
+int event_loop_modify(event_loop *loop, int fd, void *data, uint32_t events);
+int event_loop_remove(event_loop *loop, int fd);
+int event_loop_wait(event_loop *loop, int timeout_ms);
 
 #endif

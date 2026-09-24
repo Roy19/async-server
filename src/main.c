@@ -1,65 +1,141 @@
-#include <stdio.h>
-#include <unistd.h>
+#include "event_loop.h"
 #include "server.h"
 
-void add_to_event_loop_based_on_new_state(event_loop* el, event_data* ed, event_state state) {
-    if (state == READING) {
-        event_loop_modify_fd(el, ed->fd, ed, EPOLLIN | EPOLLET | EPOLLONESHOT);
-    } else if (state == WRITING) {
-        event_loop_modify_fd(el, ed->fd, ed, EPOLLOUT | EPOLLET | EPOLLONESHOT);
-    } else {
-        event_loop_delete_fd(el, ed->fd);
+#include <errno.h>
+#include <inttypes.h>
+#include <signal.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+#define DEFAULT_BIND_ADDRESS "127.0.0.1"
+#define DEFAULT_PORT 8080U
+#define DEFAULT_BACKLOG 256
+#define DEFAULT_BUFFER_CAPACITY (16U * 1024U)
+
+static volatile sig_atomic_t stop_requested;
+
+static void request_shutdown(int signal_number) {
+    (void)signal_number;
+    stop_requested = 1;
+}
+
+static int parse_port(const char *value, uint16_t *port) {
+    char *end = NULL;
+    errno = 0;
+    unsigned long parsed = strtoul(value, &end, 10);
+
+    if (errno != 0 || value == end || *end != '\0' || parsed == 0 || parsed > UINT16_MAX) {
+        return -1;
     }
+
+    *port = (uint16_t)parsed;
+    return 0;
+}
+
+static void print_usage(const char *program) {
+    fprintf(stderr, "Usage: %s [bind-address] [port]\n", program);
 }
 
 int main(int argc, char **argv) {
-    
-    int sockfd = create_socket_and_listen();
-    if (sockfd == -1) {
-        fprintf(stderr, "Failed to create socket\n");
-        return -1;
+    const char *bind_address = DEFAULT_BIND_ADDRESS;
+    uint16_t port = DEFAULT_PORT;
+
+    if (argc > 3) {
+        print_usage(argv[0]);
+        return EXIT_FAILURE;
+    }
+    if (argc >= 2) {
+        bind_address = argv[1];
+    }
+    if (argc == 3 && parse_port(argv[2], &port) == -1) {
+        fprintf(stderr, "invalid port: %s\n", argv[2]);
+        return EXIT_FAILURE;
     }
 
-    event_loop *el = create_event_loop();
-    if (el == NULL) {
-        fprintf(stderr, "Failed to initialize the event loop");
-        return -1;
+    struct sigaction shutdown_action = {
+        .sa_handler = request_shutdown,
+    };
+    sigemptyset(&shutdown_action.sa_mask);
+    if (sigaction(SIGINT, &shutdown_action, NULL) == -1 ||
+        sigaction(SIGTERM, &shutdown_action, NULL) == -1) {
+        perror("sigaction");
+        return EXIT_FAILURE;
     }
 
-    if (event_loop_add_fd(el, sockfd, EPOLLIN) == -1) {
-        fprintf(stderr, "Failed to add listening socket to event loop\n");
-        destroy_event_loop(el);
-        close(sockfd);
-        return -1;
+    int listener_fd = server_create_listener(bind_address, port, DEFAULT_BACKLOG);
+    if (listener_fd == -1) {
+        return EXIT_FAILURE;
     }
 
-    while(1) {
-        int nfds = wait_for_events(el, -1);
+    event_loop *loop = event_loop_create(MAX_EVENTS);
+    if (loop == NULL) {
+        perror("create event loop");
+        close(listener_fd);
+        return EXIT_FAILURE;
+    }
 
-        for (int i = 0; i < nfds; i++) {
-            if (((event_data *)(el->events[i].data.ptr))->fd == sockfd) {
-                // handle a new connection
-                keep_accepting_connections(el, sockfd);
-            } else {
-                event_data *ed = (event_data *)(el->events[i].data.ptr);
-                event_state new_state;
-                if (ed->state == READING) {
-                    new_state = read_from_socket(ed);
-                } else if (ed->state == WRITING) {
-                    new_state = write_to_socket(ed);
-                } else {
-                    free(ed->incoming_data);
-                    close(ed->fd);
-                    new_state = CLOSED;
+    if (event_loop_add(loop, listener_fd, NULL, EPOLLIN | EPOLLET) == -1) {
+        perror("epoll_ctl(EPOLL_CTL_ADD listener)");
+        event_loop_destroy(loop);
+        close(listener_fd);
+        return EXIT_FAILURE;
+    }
+
+    fprintf(stdout, "Echo server listening on %s:%" PRIu16 "\n", bind_address, port);
+
+    int exit_status = EXIT_SUCCESS;
+    while (!stop_requested) {
+        int ready_count = event_loop_wait(loop, -1);
+        if (ready_count == -1) {
+            if (errno == EINTR) {
+                continue;
+            }
+            perror("epoll_wait");
+            exit_status = EXIT_FAILURE;
+            break;
+        }
+
+        for (int index = 0; index < ready_count; ++index) {
+            struct epoll_event event = loop->events[index];
+
+            if (event.data.ptr == NULL) {
+                if (server_accept_connections(loop, listener_fd, DEFAULT_BUFFER_CAPACITY) == -1) {
+                    exit_status = EXIT_FAILURE;
+                    stop_requested = 1;
+                    break;
                 }
+                continue;
+            }
 
-                add_to_event_loop_based_on_new_state(el, ed, new_state);
+            connection *client = event.data.ptr;
+            enum connection_action next_action;
+
+            if ((event.events & EPOLLERR) != 0) {
+                next_action = CONNECTION_CLOSE;
+            } else if ((event.events & EPOLLIN) != 0) {
+                next_action = connection_read(client);
+            } else if ((event.events & EPOLLOUT) != 0) {
+                next_action = connection_write(client);
+            } else {
+                next_action = CONNECTION_CLOSE;
+            }
+
+            if (next_action == CONNECTION_CLOSE) {
+                connection_destroy(loop, client);
+                continue;
+            }
+
+            if (connection_update_interest(loop, client, next_action) == -1) {
+                perror("epoll_ctl(EPOLL_CTL_MOD)");
+                connection_destroy(loop, client);
             }
         }
     }
-    
-    destroy_event_loop(el);
-    close(sockfd);
 
-    return 0;
+    event_loop_remove(loop, listener_fd);
+    close(listener_fd);
+    event_loop_destroy(loop);
+    return exit_status;
 }

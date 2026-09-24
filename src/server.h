@@ -1,15 +1,36 @@
-#ifndef _SERVER_H
-#define _SERVER_H
+#ifndef ASYNC_SERVER_SERVER_H
+#define ASYNC_SERVER_SERVER_H
+
+#include <stddef.h>
+#include <stdint.h>
 
 #include "event_loop.h"
 
-int create_socket_and_listen();
-int set_non_blocking(int fd);
-event_state read_from_socket(event_data* ed);
-event_state write_to_socket(event_data* ed);
-void keep_accepting_connections(event_loop *el, int sockfd);
-int event_loop_add_fd(event_loop *el, int fd, uint32_t events);
-int event_loop_modify_fd(event_loop *el, int fd, event_data *ed, uint32_t events);
-int event_loop_delete_fd(event_loop *el, int fd);
+typedef struct connection {
+    int fd;
+    char *buffer;
+    size_t buffer_capacity;
+    size_t buffered_bytes;
+    size_t write_offset;
+} connection;
+
+enum connection_action {
+    CONNECTION_READ,
+    CONNECTION_WRITE,
+    CONNECTION_CLOSE,
+};
+
+int server_create_listener(const char *bind_address, uint16_t port, int backlog);
+
+connection *connection_create(int fd, size_t buffer_capacity);
+void connection_destroy(event_loop *loop, connection *client);
+
+enum connection_action connection_read(connection *client);
+enum connection_action connection_write(connection *client);
+int connection_update_interest(event_loop *loop, connection *client,
+                               enum connection_action action);
+
+int server_accept_connections(event_loop *loop, int listener_fd,
+                              size_t buffer_capacity);
 
 #endif
