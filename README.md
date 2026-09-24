@@ -103,8 +103,10 @@ The suite starts the server on an ephemeral loopback port and verifies:
 - small text and binary payloads;
 - payloads larger than the 16 KiB connection buffer;
 - fragmented client writes;
-- 64 concurrent clients; and
-- client half-closes after sending, while still receiving the full echo.
+- 64 concurrent clients;
+- client half-closes after sending, while still receiving the full echo, including
+  when the server is blocked writing the echo back; and
+- running out of file descriptors rejects excess connections instead of stopping the server.
 
 Run it against a separately built executable if needed:
 

@@ -2,13 +2,16 @@
 
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
-#define CONNECTION_EVENTS (EPOLLET | EPOLLONESHOT | EPOLLRDHUP)
+#define CONNECTION_EVENTS (EPOLLET | EPOLLONESHOT)
+
+static int reserve_fd = -1;
 
 static void log_errno(const char *operation) {
     fprintf(stderr, "%s: %s\n", operation, strerror(errno));
@@ -53,6 +56,15 @@ int server_create_listener(const char *bind_address, uint16_t port, int backlog)
         log_errno("listen");
         close(listener_fd);
         return -1;
+    }
+
+    if (reserve_fd == -1) {
+        reserve_fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
+        if (reserve_fd == -1) {
+            log_errno("open(/dev/null)");
+            close(listener_fd);
+            return -1;
+        }
     }
 
     return listener_fd;
@@ -165,6 +177,26 @@ int connection_update_interest(event_loop *loop, connection *client,
     return event_loop_modify(loop, client->fd, client, events);
 }
 
+/*
+ * Out of descriptors: briefly release the reserved one to accept and close a
+ * pending connection. The listener is edge-triggered, so connections left in
+ * the backlog would otherwise never be reported again.
+ */
+static int reject_pending_connection(int listener_fd) {
+    if (reserve_fd == -1) {
+        return -1;
+    }
+
+    close(reserve_fd);
+    int client_fd = accept4(listener_fd, NULL, NULL, SOCK_CLOEXEC);
+    if (client_fd >= 0) {
+        close(client_fd);
+    }
+    reserve_fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
+
+    return client_fd >= 0 ? 0 : -1;
+}
+
 int server_accept_connections(event_loop *loop, int listener_fd,
                               size_t buffer_capacity) {
     for (;;) {
@@ -194,6 +226,13 @@ int server_accept_connections(event_loop *loop, int listener_fd,
             errno == ENOPROTOOPT || errno == EHOSTDOWN || errno == ENONET ||
             errno == EHOSTUNREACH || errno == EOPNOTSUPP || errno == ENETUNREACH) {
             continue;
+        }
+        if (errno == EMFILE || errno == ENFILE) {
+            log_errno("accept4");
+            if (reject_pending_connection(listener_fd) == 0) {
+                continue;
+            }
+            return 0;
         }
 
         log_errno("accept4");
