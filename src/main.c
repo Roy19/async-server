@@ -13,6 +13,7 @@
 #define DEFAULT_PORT 8080U
 #define DEFAULT_BACKLOG 256
 #define DEFAULT_BUFFER_CAPACITY (16U * 1024U)
+#define DEFAULT_MAX_CONNECTIONS 1024U
 
 static volatile sig_atomic_t stop_requested;
 
@@ -76,8 +77,17 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
+    connection_limiter *limiter = connection_limiter_create(DEFAULT_MAX_CONNECTIONS);
+    if (limiter == NULL) {
+        perror("connection_limiter_create");
+        event_loop_destroy(loop);
+        close(listener_fd);
+        return EXIT_FAILURE;
+    }
+
     if (event_loop_add(loop, listener_fd, NULL, EPOLLIN | EPOLLET) == -1) {
         perror("epoll_ctl(EPOLL_CTL_ADD listener)");
+        connection_limiter_destroy(limiter);
         event_loop_destroy(loop);
         close(listener_fd);
         return EXIT_FAILURE;
@@ -101,7 +111,7 @@ int main(int argc, char **argv) {
             struct epoll_event event = loop->events[index];
 
             if (event.data.ptr == NULL) {
-                if (server_accept_connections(loop, listener_fd, DEFAULT_BUFFER_CAPACITY) == -1) {
+                if (server_accept_connections(loop, listener_fd, DEFAULT_BUFFER_CAPACITY, limiter) == -1) {
                     exit_status = EXIT_FAILURE;
                     stop_requested = 1;
                     break;
@@ -123,19 +133,20 @@ int main(int argc, char **argv) {
             }
 
             if (next_action == CONNECTION_CLOSE) {
-                connection_destroy(loop, client);
+                connection_destroy(loop, client, limiter);
                 continue;
             }
 
             if (connection_update_interest(loop, client, next_action) == -1) {
                 perror("epoll_ctl(EPOLL_CTL_MOD)");
-                connection_destroy(loop, client);
+                connection_destroy(loop, client, limiter);
             }
         }
     }
 
     event_loop_remove(loop, listener_fd);
     close(listener_fd);
+    connection_limiter_destroy(limiter);
     event_loop_destroy(loop);
     return exit_status;
 }
